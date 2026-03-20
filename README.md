@@ -16,6 +16,10 @@ Most expense apps track spending. spendsense **analyzes** it. Upload your data h
 - "Any unusual charges this month?"
 - "What will I spend next month?"
 
+
+[![SpendSense Demo](https://img.youtube.com/vi/2vJUg7aJh8E/0.jpg)](https://www.youtube.com/watch?v=Y2vJUg7aJh8E)
+
+
 ## Architecture
 
 ```
