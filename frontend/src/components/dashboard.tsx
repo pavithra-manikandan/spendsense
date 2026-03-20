@@ -148,7 +148,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (view: string) => void }
             <CardContent className="flex-1 pb-4">
               <ChartContainer config={pieConfig} className="[&_.recharts-text]:fill-background mx-auto aspect-square max-h-[280px]">
                 <PieChart>
-                  <ChartTooltip content={<ChartTooltipContent nameKey="spent" hideLabel />} />
+                  <ChartTooltip content={<ChartTooltipContent nameKey="category" hideLabel />} />
                   <Pie data={pieData} innerRadius={35} dataKey="spent" nameKey="category" cornerRadius={6} paddingAngle={3}>
                     <LabelList dataKey="spent" stroke="none" fontSize={11} fontWeight={500} fill="currentColor"
                       formatter={(value: number) => `$${value >= 1000 ? (value / 1000).toFixed(1) + 'k' : value}`} />
