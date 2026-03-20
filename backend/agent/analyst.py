@@ -125,31 +125,41 @@ def build_analysis(transactions: list[dict]) -> AnalysisContext:
 
     # --- Simple forecast (linear extrapolation from monthly trend) ---
     # --- Forecast: variable spending + fixed costs (rent) ---
+# --- Forecast: average of complete months, excluding housing ---
     try:
-        non_fixed = [t for t in transactions if t.get("category") not in ("housing", "savings")]
-        if non_fixed:
-            import pandas as pd
-            nf_df = pd.DataFrame(non_fixed)
-            nf_df["date_parsed"] = pd.to_datetime(nf_df["date"], errors="coerce")
-            nf_valid = nf_df.dropna(subset=["date_parsed"])
-            if not nf_valid.empty:
-                nf_valid = nf_valid.copy()
-                nf_valid["month"] = nf_valid["date_parsed"].dt.to_period("M").astype(str)
-                nf_monthly = nf_valid.groupby("month")["amount"].sum().sort_index()
-                nf_trend = {k: round(v, 2) for k, v in nf_monthly.items()}
-                variable_forecast = _forecast_next_month(nf_trend) or 0
+        if ctx.monthly_trend and len(ctx.monthly_trend) >= 2:
+            from datetime import datetime
+            current_month = datetime.now().strftime("%Y-%m")
+            
+            non_fixed = [t for t in transactions if t.get("category") not in ("housing", "savings", "transfers")]
+            if non_fixed:
+                import pandas as pd
+                nf_df = pd.DataFrame(non_fixed)
+                nf_df["date_parsed"] = pd.to_datetime(nf_df["date"], errors="coerce")
+                nf_valid = nf_df.dropna(subset=["date_parsed"]).copy()
+                if not nf_valid.empty:
+                    nf_valid["month"] = nf_valid["date_parsed"].dt.to_period("M").astype(str)
+                    nf_monthly = nf_valid.groupby("month")["amount"].sum().sort_index()
+                    complete = {k: v for k, v in nf_monthly.items() if k != current_month}
+                    if complete:
+                        variable_forecast = round(sum(complete.values()) / len(complete), 2)
+                    else:
+                        variable_forecast = round(nf_monthly.iloc[0], 2)
+                else:
+                    variable_forecast = 0
             else:
-                variable_forecast = _forecast_next_month(ctx.monthly_trend) or 0
+                variable_forecast = 0
+
+            fixed_monthly = 0
+            for t in transactions:
+                if t.get("category") == "housing":
+                    fixed_monthly = max(fixed_monthly, t.get("amount", 0))
+
+            ctx.forecast_next_month = round(variable_forecast + fixed_monthly, 2)
+        elif ctx.monthly_trend:
+            ctx.forecast_next_month = round(list(ctx.monthly_trend.values())[0], 2)
         else:
-            variable_forecast = _forecast_next_month(ctx.monthly_trend) or 0
-
-        # Add back the highest housing cost as fixed monthly rent
-        fixed_monthly = 0
-        for t in transactions:
-            if t.get("category") == "housing":
-                fixed_monthly = max(fixed_monthly, t.get("amount", 0))
-
-        ctx.forecast_next_month = round(variable_forecast + fixed_monthly, 2)
+            ctx.forecast_next_month = None
     except Exception:
         ctx.forecast_next_month = None
 
