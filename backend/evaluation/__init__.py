@@ -1,0 +1,1 @@
+from .benchmark import test_merchant_normalization, test_regex_extraction, test_csv_parsing
