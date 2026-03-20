@@ -147,6 +147,7 @@ async def ingest_pdf(file: UploadFile = File(...)):
     """
     Upload a bank statement PDF (Chase, Amex, etc).
     Extracts transactions from tables and text, normalizes merchants, categorizes.
+    Works with both checking accounts and credit card statements.
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "File must be a .pdf")
@@ -202,6 +203,8 @@ async def ingest_pdf(file: UploadFile = File(...)):
             "beginning balance", "ending balance", "transaction detail",
             "account number", "page", "statement", "date", "description",
             "balance", "totals", "continued", "total fees", "total interest",
+            "new balance", "previous balance", "minimum payment", "credit limit",
+            "available credit", "closing date", "opening date", "payment due",
         ]):
             continue
 
@@ -213,43 +216,45 @@ async def ingest_pdf(file: UploadFile = File(...)):
         if not dates:
             continue
 
-        # Determine if this is a debit (money spent) vs credit (money received)
-        # Chase checking: debits have minus sign, credits don't
-        # Chase credit card: purchases are positive, payments are negative
-        is_debit = False
-        raw_amount = None
-
-        for amt_str in amounts:
-            amt_val = float(amt_str.replace(",", ""))
-            idx = line.find(amt_str)
-            if idx > 0 and line[idx-1] == '-':
-                raw_amount = amt_val
-                is_debit = True
-                break
-
-        if not is_debit:
-            # No minus sign — check if this is income/credit by keywords
-            income_keywords = [
-                "payroll", "direct dep", "tax ref", "tax refund",
-                "payment from", "zelle payment from", "zelle from",
-                "transfer from", "deposit", "refund", "credit",
-                "irs treas", "venmo cashout", "cashback", "reward",
-                "interest payment", "trustees of univ",
-            ]
-            if any(kw in lower for kw in income_keywords):
-                continue  # Skip income
-            # If no minus and no income keyword, it might still be a credit
-            # on a checking account — skip lines where amount appears without minus
-            # and there's a second amount (balance) that's higher
-            if len(amounts) >= 2:
-                first = float(amounts[0].replace(",", ""))
-                second = float(amounts[1].replace(",", ""))
-                if second > first and f"-{amounts[0]}" not in line:
-                    continue  # Likely a credit — balance went up
-            raw_amount = float(amounts[0].replace(",", ""))
-
-        if raw_amount is None or raw_amount <= 0.01:
+        # Any line with a negative amount is a credit/payment/refund — SKIP IT
+        # This works for both checking (negative = debit) and credit cards (negative = payment/refund)
+        # We handle checking vs credit card by also filtering keywords below
+        has_negative = any(f"-{a}" in line for a in amounts)
+        if has_negative:
             continue
+
+        # Take the first positive amount as the transaction amount
+        raw_amount = float(amounts[0].replace(",", ""))
+
+        if raw_amount <= 0.01:
+            continue
+
+        # Skip income / credits / payments by keyword
+        skip_keywords = [
+            # Payments and credits
+            "payment thank", "payment to", "autopay", "automatic payment",
+            "online payment", "payment received",
+            # Income
+            "payroll", "direct dep", "tax ref", "tax refund",
+            "payment from", "zelle payment from", "zelle from",
+            "transfer from", "deposit", "refund", "credit",
+            "irs treas", "venmo cashout", "cashback", "reward",
+            "interest payment", "trustees of univ", "trustees",
+            # Balance / summary lines
+            "previous balance", "new balance", "minimum payment",
+            "late fee", "interest charged",
+        ]
+        if any(kw in lower for kw in skip_keywords):
+            continue
+
+        # For checking accounts: if no minus sign and balance goes UP, it's income
+        # Check by comparing first amount to second amount (balance)
+        if len(amounts) >= 2:
+            first = float(amounts[0].replace(",", ""))
+            second = float(amounts[1].replace(",", ""))
+            # If second number (balance) is bigger and no minus, money came IN
+            if second > first and f"-{amounts[0]}" not in line:
+                continue
 
         # Extract description
         desc = line
@@ -263,13 +268,14 @@ async def ingest_pdf(file: UploadFile = File(...)):
         if len(desc) < 3:
             continue
 
-        # Final income check on cleaned description
-        income_check = [
+        # Final keyword check on cleaned description
+        final_skip = [
             "payroll", "direct dep", "tax ref", "payment from",
             "zelle payment from", "zelle from", "deposit",
-            "irs treas", "trustees", "refund",
+            "irs treas", "trustees", "refund", "payment thank",
+            "autopay", "automatic payment",
         ]
-        if any(kw in desc.lower() for kw in income_check):
+        if any(kw in desc.lower() for kw in final_skip):
             continue
 
         # Parse date
@@ -318,18 +324,18 @@ async def ingest_pdf(file: UploadFile = File(...)):
                     model="claude-sonnet-4-20250514",
                     max_tokens=1024,
                     system="""Categorize each transaction. Return ONLY a JSON array:
-[{"merchant":"name","category":"food|groceries|transport|shopping|housing|health|utilities|subscriptions|entertainment|savings|transfers|other"}]
+[{"merchant":"name","category":"food|groceries|transport|shopping|housing|health|utilities|subscriptions|entertainment|savings|transfers|travel|other"}]
 Rules:
 - Rent/lease payments = housing
 - Zelle/Venmo sends to people = transfers
 - Credit card payments = transfers
 - Wealthfront/investment = savings
-- Grocery stores = groceries, restaurants/delivery = food
+- Grocery stores = groceries, restaurants/delivery/cafes = food
 - Gas stations = transport
-- Bars/restaurants/cafes = food
 - Parking garages = transport
-- Car rental = transport
+- Car rental = travel
 - Airbnb/hotels = travel
+- Bars/nightlife = entertainment
 Return ONLY valid JSON array.""",
                     messages=[{"role": "user", "content": batch_text}],
                 )
@@ -355,6 +361,7 @@ Return ONLY valid JSON array.""",
         "total_in_system": len(transactions),
         "sample": parsed_transactions[:5],
     }
+
 @app.post("/ingest/csv")
 async def ingest_csv(file: UploadFile = File(...)):
     """

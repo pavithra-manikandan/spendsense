@@ -74,9 +74,12 @@ def build_analysis(transactions: list[dict]) -> AnalysisContext:
         normalized_days = 30 if actual_days < 35 else actual_days
         ctx.daily_average = round(ctx.total_spent / max(normalized_days, 1), 2)
         
-        # Monthly average
-        months = max(len(ctx.monthly_trend), 1)
-        ctx.monthly_average = round(ctx.total_spent / months, 2)
+        # Monthly average — use actual monthly totals, not total/months
+        if ctx.monthly_trend:
+            monthly_values = list(ctx.monthly_trend.values())
+            ctx.monthly_average = round(sum(monthly_values) / len(monthly_values), 2)
+        else:
+            ctx.monthly_average = round(ctx.total_spent, 2)
 
     # --- By category ---
     cat_totals = df.groupby("category")["amount"].agg(["sum", "count"]).sort_values("sum", ascending=False)
