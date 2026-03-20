@@ -153,7 +153,6 @@ async def ingest_pdf(file: UploadFile = File(...)):
 
     content = await file.read()
 
-    # Write to temp file for pdfplumber
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(content)
@@ -163,15 +162,12 @@ async def ingest_pdf(file: UploadFile = File(...)):
     try:
         with pdfplumber.open(tmp_path) as pdf:
             for page in pdf.pages:
-                # Try table extraction first
                 tables = page.extract_tables()
                 if tables:
                     for table in tables:
                         for row in table:
                             if row:
                                 extracted_rows.append(" | ".join(str(cell or "") for cell in row))
-
-                # Also get raw text for line-by-line parsing
                 text = page.extract_text() or ""
                 for line in text.split("\n"):
                     line = line.strip()
@@ -180,13 +176,11 @@ async def ingest_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(422, f"Could not read PDF: {e}")
     finally:
-        import os
         os.unlink(tmp_path)
 
     if not extracted_rows:
         raise HTTPException(422, "No transaction data found in PDF")
 
-    # Parse each line for transactions
     import re
     from dateutil import parser as dateparser
 
@@ -194,8 +188,6 @@ async def ingest_pdf(file: UploadFile = File(...)):
     skipped = 0
     parsed_transactions = []
 
-    # Patterns for Chase-style statements
-    # Format: MM/DD [MM/DD] Description Amount [Balance]
     amount_pattern = re.compile(r'-?([\d,]+\.\d{2})')
     date_pattern = re.compile(r'(\d{2}/\d{2})')
 
@@ -205,45 +197,61 @@ async def ingest_pdf(file: UploadFile = File(...)):
             continue
         seen_lines.add(line)
 
-        # Skip header/footer lines
         lower = line.lower()
         if any(skip in lower for skip in [
             "beginning balance", "ending balance", "transaction detail",
             "account number", "page", "statement", "date", "description",
-            "balance", "totals", "continued"
+            "balance", "totals", "continued", "total fees", "total interest",
         ]):
             continue
 
-        # Find amounts in the line
         amounts = amount_pattern.findall(line)
         if not amounts:
             continue
 
-        # Find dates
         dates = date_pattern.findall(line)
         if not dates:
             continue
 
-        # Parse the transaction amount (first negative or first amount)
+        # Determine if this is a debit (money spent) vs credit (money received)
+        # Chase checking: debits have minus sign, credits don't
+        # Chase credit card: purchases are positive, payments are negative
+        is_debit = False
         raw_amount = None
+
         for amt_str in amounts:
-            # Check if this amount has a minus sign before it in the original line
             amt_val = float(amt_str.replace(",", ""))
             idx = line.find(amt_str)
             if idx > 0 and line[idx-1] == '-':
-                raw_amount = amt_val  # This is a debit
+                raw_amount = amt_val
+                is_debit = True
                 break
 
-        # If no negative amount found, check if it looks like income
-        if raw_amount is None:
-            # First amount is likely the transaction amount
+        if not is_debit:
+            # No minus sign — check if this is income/credit by keywords
+            income_keywords = [
+                "payroll", "direct dep", "tax ref", "tax refund",
+                "payment from", "zelle payment from", "zelle from",
+                "transfer from", "deposit", "refund", "credit",
+                "irs treas", "venmo cashout", "cashback", "reward",
+                "interest payment", "trustees of univ",
+            ]
+            if any(kw in lower for kw in income_keywords):
+                continue  # Skip income
+            # If no minus and no income keyword, it might still be a credit
+            # on a checking account — skip lines where amount appears without minus
+            # and there's a second amount (balance) that's higher
+            if len(amounts) >= 2:
+                first = float(amounts[0].replace(",", ""))
+                second = float(amounts[1].replace(",", ""))
+                if second > first and f"-{amounts[0]}" not in line:
+                    continue  # Likely a credit — balance went up
             raw_amount = float(amounts[0].replace(",", ""))
 
-        if raw_amount <= 0.01:
+        if raw_amount is None or raw_amount <= 0.01:
             continue
 
-        # Extract merchant description (between date and first amount)
-        # Remove dates and amounts to get description
+        # Extract description
         desc = line
         for d in dates:
             desc = desc.replace(d, "", 1)
@@ -255,19 +263,21 @@ async def ingest_pdf(file: UploadFile = File(...)):
         if len(desc) < 3:
             continue
 
-        # Skip income items
-        income_keywords = ["payroll", "direct dep", "tax ref", "payment from", "zelle payment from"]
-        is_income = any(kw in desc.lower() for kw in income_keywords)
-        if is_income:
+        # Final income check on cleaned description
+        income_check = [
+            "payroll", "direct dep", "tax ref", "payment from",
+            "zelle payment from", "zelle from", "deposit",
+            "irs treas", "trustees", "refund",
+        ]
+        if any(kw in desc.lower() for kw in income_check):
             continue
 
-        # Parse date (add current year)
+        # Parse date
         try:
             parsed_date = dateparser.parse(f"{dates[0]}/2026").strftime("%Y-%m-%d")
         except Exception:
             parsed_date = None
 
-        # Normalize merchant
         merchant_clean, category = normalize_merchant(desc)
 
         t = {
@@ -298,7 +308,7 @@ async def ingest_pdf(file: UploadFile = File(...)):
         parsed_transactions.append(t)
         added += 1
 
-# AI-categorize any "other" transactions in batch
+    # AI-categorize any "other" transactions in batch
     if client and parsed_transactions:
         others = [t for t in parsed_transactions if t.get("category") == "other"]
         if others:
@@ -315,6 +325,11 @@ Rules:
 - Credit card payments = transfers
 - Wealthfront/investment = savings
 - Grocery stores = groceries, restaurants/delivery = food
+- Gas stations = transport
+- Bars/restaurants/cafes = food
+- Parking garages = transport
+- Car rental = transport
+- Airbnb/hotels = travel
 Return ONLY valid JSON array.""",
                     messages=[{"role": "user", "content": batch_text}],
                 )
@@ -331,8 +346,8 @@ Return ONLY valid JSON array.""",
                         new_cat = categories.get(t["merchant"].lower())
                         if new_cat:
                             t["category"] = new_cat
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ LLM categorization failed: {e}")
 
     return {
         "imported": added,
@@ -340,7 +355,6 @@ Return ONLY valid JSON array.""",
         "total_in_system": len(transactions),
         "sample": parsed_transactions[:5],
     }
-
 @app.post("/ingest/csv")
 async def ingest_csv(file: UploadFile = File(...)):
     """
@@ -565,6 +579,7 @@ def get_analysis():
         "transaction_count": ctx.transaction_count,
         "date_range": ctx.date_range,
         "daily_average": ctx.daily_average,
+        "monthly_average": ctx.monthly_average,
         "by_category": ctx.by_category,
         "category_percentages": ctx.category_percentages,
         "top_merchants": ctx.top_merchants[:15],

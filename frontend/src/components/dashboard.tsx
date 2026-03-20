@@ -10,7 +10,7 @@ import { getAnalysis } from "@/lib/api";
 const CAT_COLORS: Record<string, string> = {
   food: "#f59e42", groceries: "#c9ea9e", shopping: "#a78bfa", transport: "#38bdf8",
   subscriptions: "#f06060", health: "#f472b6", entertainment: "#67e8f9",
-  utilities: "#94a3b8", other: "#6b7a85", housing: "#38bdf8", savings: "#ebadc7",
+  utilities: "#3a121c", other: "#686f76", housing: "#38bdf8", savings: "#56f4a8", transfers: "#e6fdbd",
 };
 
 const CAT_EMOJI: Record<string, string> = {
@@ -24,6 +24,7 @@ interface Analysis {
   transaction_count: number;
   date_range: string;
   daily_average: number;
+  monthly_average?: number;
   by_category: Record<string, number>;
   category_percentages: Record<string, number>;
   top_merchants: { merchant: string; total: number; count: number }[];
@@ -126,8 +127,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (view: string) => void }
         viewport={{ once: true }}
         transition={{ duration: 0.5 }}
       >
-        <StatCard icon={<DollarSign className="w-4 h-4" />} label="Total spent" value={`$${analysis.total_spent.toLocaleString()}`} color="text-destructive" />
-        <StatCard icon={<Zap className="w-4 h-4" />} label="Transactions" value={String(analysis.transaction_count)} color="text-chart-4" />
+        <StatCard icon={<DollarSign className="w-4 h-4" />} label="Monthly average" value={`$${(analysis.monthly_average || analysis.total_spent).toLocaleString()}`} color="text-destructive" />        <StatCard icon={<Zap className="w-4 h-4" />} label="Transactions" value={String(analysis.transaction_count)} color="text-chart-4" />
         <StatCard icon={<TrendingDown className="w-4 h-4" />} label="Daily average" value={`$${analysis.daily_average.toFixed(2)}`} color="text-primary" />
         <StatCard icon={<TrendingUp className="w-4 h-4" />} label="Forecast next month" value={analysis.forecast_next_month ? `$${analysis.forecast_next_month.toLocaleString()}` : "—"} color="text-chart-2" />
       </motion.div>

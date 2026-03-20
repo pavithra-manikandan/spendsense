@@ -150,7 +150,7 @@ MERCHANT_NORM_MAP = {
     "EVO AT CIRA":       "Evo at Cira Centre",
     "WEALTHFRONT":       "Wealthfront",
     "IRS TREAS":         "IRS",
-    "Kiwi Yogurt": "Froyo",
+    "Kiwi Yogurt": "Kiwi Yogurt",
 
 }
 

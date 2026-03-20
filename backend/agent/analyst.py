@@ -36,6 +36,7 @@ class AnalysisContext:
     forecast_next_month: Optional[float] = None
     category_percentages: dict = field(default_factory=dict)
     daily_average: float = 0.0
+    monthly_average: float = 0.0
     biggest_single: dict = field(default_factory=dict)     # {merchant, amount, date}
 
 
@@ -68,9 +69,14 @@ def build_analysis(transactions: list[dict]) -> AnalysisContext:
         max_date = valid_dates["date_parsed"].max().strftime("%Y-%m-%d")
         ctx.date_range = f"{min_date} to {max_date}"
 
-        # Daily average
-        days = (valid_dates["date_parsed"].max() - valid_dates["date_parsed"].min()).days
-        ctx.daily_average = round(ctx.total_spent / max(days, 1), 2)
+        # Daily average — normalize to 30-day month
+        actual_days = (valid_dates["date_parsed"].max() - valid_dates["date_parsed"].min()).days
+        normalized_days = 30 if actual_days < 35 else actual_days
+        ctx.daily_average = round(ctx.total_spent / max(normalized_days, 1), 2)
+        
+        # Monthly average
+        months = max(len(ctx.monthly_trend), 1)
+        ctx.monthly_average = round(ctx.total_spent / months, 2)
 
     # --- By category ---
     cat_totals = df.groupby("category")["amount"].agg(["sum", "count"]).sort_values("sum", ascending=False)
@@ -115,26 +121,34 @@ def build_analysis(transactions: list[dict]) -> AnalysisContext:
     ctx.recurring = _detect_recurring(df)
 
     # --- Simple forecast (linear extrapolation from monthly trend) ---
-    # Forecast excluding housing/rent for more useful prediction
-    non_housing = [t for t in transactions if t.get("category") not in ("housing", "savings")]
-    if non_housing:
-        import pandas as pd
-        nh_df = pd.DataFrame(non_housing)
-        nh_df["date_parsed"] = pd.to_datetime(nh_df["date"], errors="coerce")
-        nh_valid = nh_df.dropna(subset=["date_parsed"])
-        if not nh_valid.empty:
-            nh_valid = nh_valid.copy()
-            nh_valid["month"] = nh_valid["date_parsed"].dt.to_period("M").astype(str)
-            nh_monthly = nh_valid.groupby("month")["amount"].sum().sort_index()
-            nh_trend = {k: round(v, 2) for k, v in nh_monthly.items()}
-            base_forecast = _forecast_next_month(nh_trend)
-            # Add back fixed recurring costs
-            rent = sum(r["avg_amount"] for r in ctx.recurring if r.get("merchant", "").lower() in ["evo at cira centre", "rent"])
-            ctx.forecast_next_month = round((base_forecast or 0) + rent, 2)
+    # --- Forecast: variable spending + fixed costs (rent) ---
+    try:
+        non_fixed = [t for t in transactions if t.get("category") not in ("housing", "savings")]
+        if non_fixed:
+            import pandas as pd
+            nf_df = pd.DataFrame(non_fixed)
+            nf_df["date_parsed"] = pd.to_datetime(nf_df["date"], errors="coerce")
+            nf_valid = nf_df.dropna(subset=["date_parsed"])
+            if not nf_valid.empty:
+                nf_valid = nf_valid.copy()
+                nf_valid["month"] = nf_valid["date_parsed"].dt.to_period("M").astype(str)
+                nf_monthly = nf_valid.groupby("month")["amount"].sum().sort_index()
+                nf_trend = {k: round(v, 2) for k, v in nf_monthly.items()}
+                variable_forecast = _forecast_next_month(nf_trend) or 0
+            else:
+                variable_forecast = _forecast_next_month(ctx.monthly_trend) or 0
         else:
-            ctx.forecast_next_month = _forecast_next_month(ctx.monthly_trend)
-    else:
-        ctx.forecast_next_month = _forecast_next_month(ctx.monthly_trend)
+            variable_forecast = _forecast_next_month(ctx.monthly_trend) or 0
+
+        # Add back the highest housing cost as fixed monthly rent
+        fixed_monthly = 0
+        for t in transactions:
+            if t.get("category") == "housing":
+                fixed_monthly = max(fixed_monthly, t.get("amount", 0))
+
+        ctx.forecast_next_month = round(variable_forecast + fixed_monthly, 2)
+    except Exception:
+        ctx.forecast_next_month = None
 
     return ctx
 
@@ -215,13 +229,21 @@ def _detect_recurring(df) -> list:
 
 def _forecast_next_month(monthly_trend: dict, recurring: list = None) -> Optional[float]:
     """
-    Simple linear regression forecast for next month's spending.
-    Uses last 3-6 months of data.
+    Forecast next month's spending.
+    - 1 month of data: project current month as-is
+    - 2+ months: linear regression
     """
-    if len(monthly_trend) < 2:
+    if not monthly_trend:
         return None
 
-    values = list(monthly_trend.values())[-6:]
+    values = list(monthly_trend.values())
+
+    # Only 1 month — just project it forward
+    if len(values) == 1:
+        return round(values[0], 2)
+
+    # 2+ months — linear regression
+    values = values[-6:]
     n = len(values)
     x_mean = (n - 1) / 2
     y_mean = sum(values) / n
@@ -236,7 +258,6 @@ def _forecast_next_month(monthly_trend: dict, recurring: list = None) -> Optiona
     forecast = y_mean + slope * (n - x_mean)
 
     return round(max(forecast, 0), 2)
-
 
 def _build_analysis_no_pandas(transactions: list[dict]) -> AnalysisContext:
     """Fallback analytics without pandas."""
