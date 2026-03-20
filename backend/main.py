@@ -8,6 +8,7 @@ Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 
 import os
+import pdfplumber
 import json
 import base64
 import uuid
@@ -44,7 +45,66 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 transactions: list[dict] = []      # all normalized transactions
 seen_dedup_keys: set[str] = set()  # for duplicate detection
-client = anthropic.Anthropic()     # reads ANTHROPIC_API_KEY from env
+# Initialize client — handle missing API key gracefully
+try:
+    client = anthropic.Anthropic()
+except Exception:
+    client = None
+
+
+def check_api_available():
+    """Check if the Anthropic client is configured."""
+    if client is None:
+        raise HTTPException(
+            503,
+            detail={
+                "error": "api_not_configured",
+                "message": "ANTHROPIC_API_KEY is not set. Set it with: export ANTHROPIC_API_KEY='sk-ant-...'",
+            }
+        )
+
+
+def handle_api_error(e: Exception) -> dict:
+    """
+    Parse Anthropic API errors into user-friendly messages.
+    Handles: rate limits, credit exhaustion, auth failures, overload.
+    """
+    error_str = str(e).lower()
+    error_type = type(e).__name__
+
+    if "credit" in error_str or "billing" in error_str or "402" in error_str or "insufficient" in error_str:
+        return {
+            "error": "credits_exhausted",
+            "message": "Your Anthropic API credits have run out. Add more at console.anthropic.com/settings/plans",
+            "fallback": True,
+        }
+
+    if "rate" in error_str or "429" in error_str or "too many" in error_str:
+        return {
+            "error": "rate_limited",
+            "message": "Too many requests — wait a minute and try again.",
+            "fallback": True,
+        }
+
+    if "auth" in error_str or "401" in error_str or "invalid.*key" in error_str or "permission" in error_str:
+        return {
+            "error": "auth_failed",
+            "message": "Your API key is invalid or expired. Check it at console.anthropic.com/settings/keys",
+            "fallback": False,
+        }
+
+    if "overloaded" in error_str or "529" in error_str or "503" in error_str:
+        return {
+            "error": "api_overloaded",
+            "message": "Anthropic API is temporarily overloaded. Try again in a few seconds.",
+            "fallback": True,
+        }
+
+    return {
+        "error": "api_error",
+        "message": f"API call failed: {error_type} — {str(e)[:200]}",
+        "fallback": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +132,14 @@ class BulkManualEntry(BaseModel):
 
 @app.get("/")
 def health():
-    return {"status": "ok", "transactions": len(transactions), "version": "2.0"}
+    api_status = "configured" if client else "not_configured"
+    return {
+        "status": "ok",
+        "transactions": len(transactions),
+        "version": "2.0",
+        "api_status": api_status,
+        "note": None if client else "Set ANTHROPIC_API_KEY for AI features. CSV import, manual entry, and dashboard work without it.",
+    }
 
 
 @app.post("/ingest/csv")
@@ -115,6 +182,8 @@ async def ingest_screenshot(file: UploadFile = File(...)):
     """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Must be an image file")
+    
+    check_api_available() 
 
     image_bytes = await file.read()
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
@@ -139,8 +208,16 @@ async def ingest_screenshot(file: UploadFile = File(...)):
         )
         raw = resp.content[0].text
         parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+    except anthropic.APIStatusError as e:
+        err = handle_api_error(e)
+        raise HTTPException(e.status_code, detail=err)
+    except anthropic.APIConnectionError:
+        raise HTTPException(503, detail={"error": "connection_failed", "message": "Cannot reach the Anthropic API. Check your internet connection."})
+    except json.JSONDecodeError:
+        raise HTTPException(502, detail={"error": "parse_failed", "message": "AI returned invalid JSON. Try uploading a clearer image."})
     except Exception as e:
-        raise HTTPException(502, f"Extraction failed: {e}")
+        err = handle_api_error(e)
+        raise HTTPException(502, detail=err)
 
     # Normalize merchant
     merchant_raw = parsed.get("merchant", "Unknown")
@@ -220,12 +297,8 @@ def ask_question(req: AskRequest):
     """
     Ask the financial insight agent a question about your spending.
 
-    Examples:
-    - "Where am I overspending?"
-    - "How can I save $200 next month?"
-    - "What are my subscriptions costing me?"
-    - "Show me my spending trend"
-    - "Any unusual charges this month?"
+    If the API key is missing or credits are exhausted, falls back to
+    template-based answers using only pandas analysis (no LLM).
     """
     if not transactions:
         return {
@@ -233,8 +306,19 @@ def ask_question(req: AskRequest):
             "context": {},
         }
 
-    return ask_agent(req.question, transactions, client=client)
-
+    if client:
+        try:
+            return ask_agent(req.question, transactions, client=client)
+        except Exception as e:
+            err = handle_api_error(e)
+            result = ask_agent(req.question, transactions, client=None)
+            result["api_warning"] = err["message"]
+            result["answer"] = f"[Answered without AI — {err['message']}]\n\n{result['answer']}"
+            return result
+    else:
+        result = ask_agent(req.question, transactions, client=None)
+        result["api_warning"] = "No API key configured. Using basic analysis only. Set ANTHROPIC_API_KEY for AI-powered insights."
+        return result
 
 @app.get("/analysis")
 def get_analysis():
