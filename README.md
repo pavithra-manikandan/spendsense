@@ -2,6 +2,8 @@
 
 **spidey sense, but for your money.**
 
+SpendSense is an AI-powered financial analysis system that transforms raw transaction data into actionable insights using a hybrid pipeline (rule-based extraction + statistical analysis + LLM reasoning).
+
 Upload your bank statement, ask "where am I overspending?" — get specific, actionable answers with dollar amounts. Not a tracker. An analyst.
 
 ## What It Does
