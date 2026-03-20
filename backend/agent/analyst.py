@@ -115,7 +115,26 @@ def build_analysis(transactions: list[dict]) -> AnalysisContext:
     ctx.recurring = _detect_recurring(df)
 
     # --- Simple forecast (linear extrapolation from monthly trend) ---
-    ctx.forecast_next_month = _forecast_next_month(ctx.monthly_trend)
+    # Forecast excluding housing/rent for more useful prediction
+    non_housing = [t for t in transactions if t.get("category") not in ("housing", "savings")]
+    if non_housing:
+        import pandas as pd
+        nh_df = pd.DataFrame(non_housing)
+        nh_df["date_parsed"] = pd.to_datetime(nh_df["date"], errors="coerce")
+        nh_valid = nh_df.dropna(subset=["date_parsed"])
+        if not nh_valid.empty:
+            nh_valid = nh_valid.copy()
+            nh_valid["month"] = nh_valid["date_parsed"].dt.to_period("M").astype(str)
+            nh_monthly = nh_valid.groupby("month")["amount"].sum().sort_index()
+            nh_trend = {k: round(v, 2) for k, v in nh_monthly.items()}
+            base_forecast = _forecast_next_month(nh_trend)
+            # Add back fixed recurring costs
+            rent = sum(r["avg_amount"] for r in ctx.recurring if r.get("merchant", "").lower() in ["evo at cira centre", "rent"])
+            ctx.forecast_next_month = round((base_forecast or 0) + rent, 2)
+        else:
+            ctx.forecast_next_month = _forecast_next_month(ctx.monthly_trend)
+    else:
+        ctx.forecast_next_month = _forecast_next_month(ctx.monthly_trend)
 
     return ctx
 
@@ -194,7 +213,7 @@ def _detect_recurring(df) -> list:
     return sorted(recurring, key=lambda x: x["estimated_annual"], reverse=True)
 
 
-def _forecast_next_month(monthly_trend: dict) -> Optional[float]:
+def _forecast_next_month(monthly_trend: dict, recurring: list = None) -> Optional[float]:
     """
     Simple linear regression forecast for next month's spending.
     Uses last 3-6 months of data.
@@ -202,12 +221,11 @@ def _forecast_next_month(monthly_trend: dict) -> Optional[float]:
     if len(monthly_trend) < 2:
         return None
 
-    values = list(monthly_trend.values())[-6:]  # last 6 months
+    values = list(monthly_trend.values())[-6:]
     n = len(values)
     x_mean = (n - 1) / 2
     y_mean = sum(values) / n
 
-    # Slope via least squares
     numerator = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
     denominator = sum((i - x_mean) ** 2 for i in range(n))
 
@@ -217,7 +235,7 @@ def _forecast_next_month(monthly_trend: dict) -> Optional[float]:
     slope = numerator / denominator
     forecast = y_mean + slope * (n - x_mean)
 
-    return round(max(forecast, 0), 2)  # don't predict negative
+    return round(max(forecast, 0), 2)
 
 
 def _build_analysis_no_pandas(transactions: list[dict]) -> AnalysisContext:

@@ -24,16 +24,22 @@ export function UploadPage({ onNavigate }: { onNavigate: (view: string) => void 
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleUpload = async (file: File) => {
-    if (!file.name.endsWith(".csv")) {
-      setError("Please upload a .csv file");
+const handleUpload = async (file: File) => {
+    const isCSV = file.name.toLowerCase().endsWith(".csv");
+    const isPDF = file.name.toLowerCase().endsWith(".pdf");
+    if (!isCSV && !isPDF) {
+      setError("Please upload a .csv or .pdf file");
       return;
     }
     setIsUploading(true);
     setResult(null);
     setError(null);
     try {
-      const data = await ingestCSV(file);
+      const endpoint = isPDF ? "/api/ingest/pdf" : "/api/ingest/csv";
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(endpoint, { method: "POST", body: form });
+      const data = await res.json();
       if (data.detail) {
         setError(typeof data.detail === "string" ? data.detail : data.detail.message || "Upload failed");
       } else {
@@ -58,7 +64,7 @@ export function UploadPage({ onNavigate }: { onNavigate: (view: string) => void 
             dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/40 bg-card"
           }`}
         >
-          <input ref={fileRef} type="file" accept=".csv" className="hidden"
+          <input ref={fileRef} type="file" accept=".csv,.pdf" className="hidden"
             onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
 
           <motion.div animate={isUploading ? { rotate: 360 } : {}} transition={isUploading ? { repeat: Infinity, duration: 1.5, ease: "linear" } : {}}>
@@ -67,7 +73,7 @@ export function UploadPage({ onNavigate }: { onNavigate: (view: string) => void 
           </motion.div>
 
           <h3 className="text-lg font-medium mb-2">
-            {isUploading ? "Processing your statement..." : "Drop your bank CSV here"}
+            {isUploading ? "Processing your statement..." : "Drop your bank PDF or CSV here"}
           </h3>
           <p className="text-sm text-muted-foreground">
             or click to browse — works with Chase, Amex, Capital One, any bank
@@ -101,9 +107,15 @@ export function UploadPage({ onNavigate }: { onNavigate: (view: string) => void 
               animate={{ opacity: 1, y: 0 }}
               className="mt-6 space-y-4"
             >
-              <Card className="border-chart-2/30 bg-chart-2/5">
+              <Card className="border-primary/30 bg-primary/5 relative overflow-hidden">
                 <CardContent className="pt-5">
                   <div className="flex items-center gap-3 mb-3">
+                    <motion.div
+                      className="absolute top-0 left-0 h-1 bg-primary rounded-full"
+                      initial={{ width: "0%" }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 2.8, ease: "linear" }}
+                    />
                     <CheckCircle className="w-6 h-6 text-chart-2" />
                     <div>
                       <div className="text-lg font-semibold text-chart-2">
@@ -117,16 +129,16 @@ export function UploadPage({ onNavigate }: { onNavigate: (view: string) => void 
 
                   <div className="flex gap-2 mt-4">
                     <button
-                      onClick={() => onNavigate("dashboard")}
-                      className="flex items-center gap-2 px-4 py-2 bg-chart-2 text-background rounded-lg font-medium text-sm hover:opacity-90 transition-opacity"
+                      onClick={() => onNavigate("chat")}
+                      className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:opacity-90 transition-opacity"
                     >
-                      View Dashboard <ArrowRight className="w-4 h-4" />
+                      Ask about my spending <ArrowRight className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => onNavigate("chat")}
-                      className="flex items-center gap-2 px-4 py-2 bg-white/10 text-foreground rounded-lg font-medium text-sm hover:bg-white/15 transition-colors"
+                      onClick={() => onNavigate("dashboard")}
+                      className="flex items-center gap-2 px-4 py-2 bg-secondary text-foreground rounded-lg font-medium text-sm hover:bg-secondary/80 transition-colors border border-border"
                     >
-                      Ask a question
+                      View Dashboard
                     </button>
                   </div>
                 </CardContent>

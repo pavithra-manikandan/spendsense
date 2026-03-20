@@ -142,6 +142,205 @@ def health():
     }
 
 
+@app.post("/ingest/pdf")
+async def ingest_pdf(file: UploadFile = File(...)):
+    """
+    Upload a bank statement PDF (Chase, Amex, etc).
+    Extracts transactions from tables and text, normalizes merchants, categorizes.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "File must be a .pdf")
+
+    content = await file.read()
+
+    # Write to temp file for pdfplumber
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    extracted_rows = []
+    try:
+        with pdfplumber.open(tmp_path) as pdf:
+            for page in pdf.pages:
+                # Try table extraction first
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        for row in table:
+                            if row:
+                                extracted_rows.append(" | ".join(str(cell or "") for cell in row))
+
+                # Also get raw text for line-by-line parsing
+                text = page.extract_text() or ""
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line and any(c.isdigit() for c in line):
+                        extracted_rows.append(line)
+    except Exception as e:
+        raise HTTPException(422, f"Could not read PDF: {e}")
+    finally:
+        import os
+        os.unlink(tmp_path)
+
+    if not extracted_rows:
+        raise HTTPException(422, "No transaction data found in PDF")
+
+    # Parse each line for transactions
+    import re
+    from dateutil import parser as dateparser
+
+    added = 0
+    skipped = 0
+    parsed_transactions = []
+
+    # Patterns for Chase-style statements
+    # Format: MM/DD [MM/DD] Description Amount [Balance]
+    amount_pattern = re.compile(r'-?([\d,]+\.\d{2})')
+    date_pattern = re.compile(r'(\d{2}/\d{2})')
+
+    seen_lines = set()
+    for line in extracted_rows:
+        if line in seen_lines:
+            continue
+        seen_lines.add(line)
+
+        # Skip header/footer lines
+        lower = line.lower()
+        if any(skip in lower for skip in [
+            "beginning balance", "ending balance", "transaction detail",
+            "account number", "page", "statement", "date", "description",
+            "balance", "totals", "continued"
+        ]):
+            continue
+
+        # Find amounts in the line
+        amounts = amount_pattern.findall(line)
+        if not amounts:
+            continue
+
+        # Find dates
+        dates = date_pattern.findall(line)
+        if not dates:
+            continue
+
+        # Parse the transaction amount (first negative or first amount)
+        raw_amount = None
+        for amt_str in amounts:
+            # Check if this amount has a minus sign before it in the original line
+            amt_val = float(amt_str.replace(",", ""))
+            idx = line.find(amt_str)
+            if idx > 0 and line[idx-1] == '-':
+                raw_amount = amt_val  # This is a debit
+                break
+
+        # If no negative amount found, check if it looks like income
+        if raw_amount is None:
+            # First amount is likely the transaction amount
+            raw_amount = float(amounts[0].replace(",", ""))
+
+        if raw_amount <= 0.01:
+            continue
+
+        # Extract merchant description (between date and first amount)
+        # Remove dates and amounts to get description
+        desc = line
+        for d in dates:
+            desc = desc.replace(d, "", 1)
+        for a in amounts:
+            desc = desc.replace(a, "")
+        desc = desc.replace("-", " ").strip()
+        desc = re.sub(r'\s+', ' ', desc).strip()
+
+        if len(desc) < 3:
+            continue
+
+        # Skip income items
+        income_keywords = ["payroll", "direct dep", "tax ref", "payment from", "zelle payment from"]
+        is_income = any(kw in desc.lower() for kw in income_keywords)
+        if is_income:
+            continue
+
+        # Parse date (add current year)
+        try:
+            parsed_date = dateparser.parse(f"{dates[0]}/2026").strftime("%Y-%m-%d")
+        except Exception:
+            parsed_date = None
+
+        # Normalize merchant
+        merchant_clean, category = normalize_merchant(desc)
+
+        t = {
+            "id": str(uuid.uuid4())[:8],
+            "merchant": merchant_clean,
+            "merchant_raw": desc,
+            "amount": round(raw_amount, 2),
+            "date": parsed_date or "",
+            "category": category,
+            "currency": "USD",
+            "items": None,
+            "payment_method": None,
+            "source": "pdf",
+            "extraction_method": "regex",
+            "confidence": 0.75,
+            "notes": None,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+        key = compute_dedup_key(t["merchant"], t["amount"], t["date"])
+        if key in seen_dedup_keys:
+            skipped += 1
+            continue
+        seen_dedup_keys.add(key)
+        t["idempotency_key"] = key
+
+        transactions.append(t)
+        parsed_transactions.append(t)
+        added += 1
+
+# AI-categorize any "other" transactions in batch
+    if client and parsed_transactions:
+        others = [t for t in parsed_transactions if t.get("category") == "other"]
+        if others:
+            try:
+                batch_text = "\n".join(f"{t['merchant']}: ${t['amount']}" for t in others)
+                resp = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1024,
+                    system="""Categorize each transaction. Return ONLY a JSON array:
+[{"merchant":"name","category":"food|groceries|transport|shopping|housing|health|utilities|subscriptions|entertainment|savings|transfers|other"}]
+Rules:
+- Rent/lease payments = housing
+- Zelle/Venmo sends to people = transfers
+- Credit card payments = transfers
+- Wealthfront/investment = savings
+- Grocery stores = groceries, restaurants/delivery = food
+Return ONLY valid JSON array.""",
+                    messages=[{"role": "user", "content": batch_text}],
+                )
+                raw = resp.content[0].text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+                categories = {item["merchant"].lower(): item["category"] for item in json.loads(raw)}
+
+                for t in parsed_transactions:
+                    if t.get("category") == "other":
+                        new_cat = categories.get(t["merchant"].lower())
+                        if new_cat:
+                            t["category"] = new_cat
+                for t in transactions:
+                    if t.get("category") == "other" and t.get("idempotency_key"):
+                        new_cat = categories.get(t["merchant"].lower())
+                        if new_cat:
+                            t["category"] = new_cat
+            except Exception:
+                pass
+
+    return {
+        "imported": added,
+        "duplicates_skipped": skipped,
+        "total_in_system": len(transactions),
+        "sample": parsed_transactions[:5],
+    }
+
 @app.post("/ingest/csv")
 async def ingest_csv(file: UploadFile = File(...)):
     """
@@ -165,6 +364,37 @@ async def ingest_csv(file: UploadFile = File(...)):
         t["idempotency_key"] = key
         transactions.append(t)
         added += 1
+# AI-categorize any "other" transactions in batch
+    imported_txns = [t for t in transactions[-added:]] if added > 0 else []
+    if client and imported_txns:
+        others = [t for t in imported_txns if t.get("category") == "other"]
+        if others:
+            try:
+                batch_text = "\n".join(f"{t['merchant']}: ${t['amount']}" for t in others)
+                resp = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1024,
+                    system="""Categorize each transaction. Return ONLY a JSON array:
+[{"merchant":"name","category":"food|groceries|transport|shopping|housing|health|utilities|subscriptions|entertainment|savings|transfers|other"}]
+Rules:
+- Rent/lease payments = housing
+- Zelle/Venmo sends to people = transfers
+- Credit card payments = transfers
+- Wealthfront/investment = savings
+- Grocery stores = groceries, restaurants/delivery = food
+Return ONLY valid JSON array.""",
+                    messages=[{"role": "user", "content": batch_text}],
+                )
+                raw = resp.content[0].text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+                categories = {item["merchant"].lower(): item["category"] for item in json.loads(raw)}
+
+                for t in imported_txns:
+                    if t.get("category") == "other":
+                        new_cat = categories.get(t["merchant"].lower())
+                        if new_cat:
+                            t["category"] = new_cat
+            except Exception:
+                pass
 
     return {
         "imported": added,

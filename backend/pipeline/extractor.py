@@ -142,6 +142,16 @@ MERCHANT_NORM_MAP = {
     "CVS/PHARMACY":      "CVS",
     "WALGREENS":         "Walgreens",
     "RITE AID":          "Rite Aid",
+    # Banking / transfers
+    "ZELLE PAYMENT TO":  "",     # Strip prefix, keep recipient
+    "ZELLE PAYMENT":     "Zelle",
+    "PAYMENT TO CHASE":  "Chase Credit Card Payment",
+    "PAYMENT TO":        "",     # Strip prefix for other card payments
+    "EVO AT CIRA":       "Evo at Cira Centre",
+    "WEALTHFRONT":       "Wealthfront",
+    "IRS TREAS":         "IRS",
+    "Kiwi Yogurt": "Froyo",
+
 }
 
 # Auto-categorization from normalized merchant
@@ -159,6 +169,11 @@ MERCHANT_CATEGORY = {
     "Starbucks": "food", "Chick-fil-A": "food", "McDonald's": "food",
     "Dunkin'": "food", "Chipotle": "food",
     "CVS": "health", "Walgreens": "health", "Rite Aid": "health",
+    "Chase Credit Card Payment": "other",
+    "Zelle": "other",
+    "Evo at Cira Centre": "housing",
+    "Wealthfront": "savings",
+    "IRS": "other", "Kiwi Yogurt" : "food",
 }
 
 

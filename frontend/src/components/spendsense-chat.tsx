@@ -1,16 +1,14 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
-  ArrowUpIcon,
   SendIcon,
   LoaderIcon,
-  Sparkles,
   TrendingDown,
   DollarSign,
   AlertTriangle,
   BarChart3,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { askAgent } from "@/lib/api";
 
 interface ChatMessage {
@@ -31,24 +29,16 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", text: hasData
       ? "Your data is loaded. Ask me anything — where you're overspending, how to save, unusual charges, subscription costs."
-      : "Hey! Upload a bank CSV first, then ask me anything about your spending. I'll give you specific advice with dollar amounts."
+      : "Hey! Upload a bank CSV or PDF first, then ask me anything about your spending. I'll give you specific advice with dollar amounts."
     }
   ]);
   const [isThinking, setIsThinking] = useState(false);
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-  const [inputFocused, setInputFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => setMousePosition({ x: e.clientX, y: e.clientY });
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, []);
 
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -90,10 +80,10 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
 
   return (
     <div className="flex flex-col h-full relative overflow-hidden">
-      {/* Ambient glow */}
+      {/* Ambient glow — gold/amber to match dashboard */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-violet-500/10 rounded-full mix-blend-normal filter blur-[128px] animate-pulse" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-indigo-500/10 rounded-full mix-blend-normal filter blur-[128px] animate-pulse" style={{ animationDelay: "700ms" }} />
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/8 rounded-full filter blur-[128px] animate-pulse" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-chart-2/8 rounded-full filter blur-[128px] animate-pulse" style={{ animationDelay: "700ms" }} />
       </div>
 
       {/* Messages */}
@@ -105,16 +95,17 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
           >
+            <div className="text-5xl mb-4">💸</div>
             <h2 className="text-2xl font-medium tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white/90 to-white/40 pb-1">
               What's on your mind?
             </h2>
             <motion.div
-              className="h-px bg-gradient-to-r from-transparent via-white/20 to-transparent mx-auto max-w-xs mt-2"
+              className="h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent mx-auto max-w-xs mt-3"
               initial={{ width: 0 }}
               animate={{ width: "100%" }}
               transition={{ delay: 0.5, duration: 0.8 }}
             />
-            <p className="text-sm text-white/40 mt-3">Ask about your spending patterns</p>
+            <p className="text-sm text-muted-foreground mt-3">Ask about your spending patterns</p>
           </motion.div>
         )}
 
@@ -129,12 +120,12 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
             <div className={cn(
               "max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap",
               msg.role === "user"
-                ? "bg-white text-[#0A0A0B] font-medium"
-                : "backdrop-blur-xl bg-white/[0.03] border border-white/[0.08] text-white/90"
+                ? "bg-primary text-primary-foreground font-medium"
+                : "bg-card border border-border text-foreground"
             )}>
               {msg.text}
               {msg.warning && (
-                <div className="mt-2 pt-2 border-t border-white/10 text-xs text-amber-400/70 flex items-center gap-1.5">
+                <div className="mt-2 pt-2 border-t border-border text-xs text-primary/70 flex items-center gap-1.5">
                   <AlertTriangle className="w-3 h-3" />
                   {msg.warning}
                 </div>
@@ -145,16 +136,15 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
 
         {isThinking && (
           <motion.div className="flex mb-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-            <div className="backdrop-blur-xl bg-white/[0.03] border border-white/[0.08] rounded-2xl px-4 py-3 flex items-center gap-3">
-              <span className="text-sm text-white/50">Analyzing</span>
+            <div className="bg-card border border-border rounded-2xl px-4 py-3 flex items-center gap-3">
+              <span className="text-sm text-muted-foreground">Analyzing</span>
               <div className="flex items-center">
                 {[1, 2, 3].map((dot) => (
                   <motion.div
                     key={dot}
-                    className="w-1.5 h-1.5 bg-white/80 rounded-full mx-0.5"
+                    className="w-1.5 h-1.5 bg-primary rounded-full mx-0.5"
                     animate={{ opacity: [0.3, 0.9, 0.3], scale: [0.85, 1.1, 0.85] }}
                     transition={{ duration: 1.2, repeat: Infinity, delay: dot * 0.15 }}
-                    style={{ boxShadow: "0 0 4px rgba(255,255,255,0.3)" }}
                   />
                 ))}
               </div>
@@ -171,7 +161,7 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
             <motion.button
               key={s.label}
               onClick={() => handleSend(s.question)}
-              className="flex items-center gap-2 px-3 py-2 bg-white/[0.02] hover:bg-white/[0.06] rounded-lg text-sm text-white/50 hover:text-white/90 transition-all border border-white/[0.05]"
+              className="flex items-center gap-2 px-3 py-2 bg-card hover:bg-secondary rounded-lg text-sm text-muted-foreground hover:text-primary transition-all border border-border"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.08 }}
@@ -185,21 +175,15 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
 
       {/* Input area */}
       <div className="relative z-10 px-4 pb-4">
-        <motion.div
-          className="backdrop-blur-2xl bg-white/[0.02] rounded-2xl border border-white/[0.05] shadow-2xl"
-          initial={{ scale: 0.98 }}
-          animate={{ scale: 1 }}
-        >
+        <div className="bg-card rounded-2xl border border-border shadow-2xl">
           <div className="p-3">
             <textarea
               ref={textareaRef}
               value={value}
               onChange={(e) => { setValue(e.target.value); adjustHeight(); }}
               onKeyDown={handleKeyDown}
-              onFocus={() => setInputFocused(true)}
-              onBlur={() => setInputFocused(false)}
               placeholder="Ask spendsense a question..."
-              className="w-full px-3 py-2 resize-none bg-transparent border-none text-white/90 text-sm focus:outline-none placeholder:text-white/20"
+              className="w-full px-3 py-2 resize-none bg-transparent border-none text-foreground text-sm focus:outline-none placeholder:text-muted-foreground"
               style={{ minHeight: 60, maxHeight: 200, overflow: "hidden" }}
             />
           </div>
@@ -212,25 +196,16 @@ export function SpendSenseChat({ hasData }: { hasData: boolean }) {
               className={cn(
                 "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2",
                 value.trim()
-                  ? "bg-white text-[#0A0A0B] shadow-lg shadow-white/10"
-                  : "bg-white/[0.05] text-white/40"
+                  ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20"
+                  : "bg-secondary text-muted-foreground"
               )}
             >
               {isThinking ? <LoaderIcon className="w-4 h-4 animate-spin" /> : <SendIcon className="w-4 h-4" />}
               <span>Send</span>
             </motion.button>
           </div>
-        </motion.div>
+        </div>
       </div>
-
-      {/* Mouse follow glow */}
-      {inputFocused && (
-        <motion.div
-          className="fixed w-[50rem] h-[50rem] rounded-full pointer-events-none z-0 opacity-[0.02] bg-gradient-to-r from-violet-500 via-fuchsia-500 to-indigo-500 blur-[96px]"
-          animate={{ x: mousePosition.x - 400, y: mousePosition.y - 400 }}
-          transition={{ type: "spring", damping: 25, stiffness: 150, mass: 0.5 }}
-        />
-      )}
     </div>
   );
 }

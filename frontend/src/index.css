@@ -1,30 +1,30 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #0a0b0d;
-  --color-foreground: #e8e6e1;
-  --color-card: #13151a;
-  --color-card-foreground: #e8e6e1;
-  --color-primary: #f0a030;
-  --color-primary-foreground: #0a0b0d;
-  --color-secondary: #1a1d24;
-  --color-secondary-foreground: #e8e6e1;
-  --color-muted: #1a1d24;
-  --color-muted-foreground: #8a8880;
-  --color-accent: #1a1d24;
-  --color-accent-foreground: #e8e6e1;
-  --color-destructive: #e85d50;
-  --color-border: #2a2d35;
-  --color-input: #2a2d35;
-  --color-ring: #f0a030;
-  --color-chart-1: #f0a030;
-  --color-chart-2: #40c9a2;
-  --color-chart-3: #9b7dff;
-  --color-chart-4: #5ba4f5;
-  --color-chart-5: #e85d50;
-  --color-chart-6: #f06090;
-  --color-chart-7: #c084fc;
-  --color-chart-8: #64748b;
+  --color-background: #0b0f11;
+  --color-foreground: #e0e4e8;
+  --color-card: #111619;
+  --color-card-foreground: #e0e4e8;
+  --color-primary: #2dd4a8;
+  --color-primary-foreground: #0b0f11;
+  --color-secondary: #161b1f;
+  --color-secondary-foreground: #e0e4e8;
+  --color-muted: #161b1f;
+  --color-muted-foreground: #6b7a85;
+  --color-accent: #161b1f;
+  --color-accent-foreground: #e0e4e8;
+  --color-destructive: #f06060;
+  --color-border: #1e2830;
+  --color-input: #1e2830;
+  --color-ring: #2dd4a8;
+  --color-chart-1: #2dd4a8;
+  --color-chart-2: #38bdf8;
+  --color-chart-3: #a78bfa;
+  --color-chart-4: #f59e42;
+  --color-chart-5: #f06060;
+  --color-chart-6: #f472b6;
+  --color-chart-7: #67e8f9;
+  --color-chart-8: #94a3b8;
 }
 
 body {
